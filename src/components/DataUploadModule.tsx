@@ -54,6 +54,8 @@ export const DataUploadModule: React.FC<DataUploadModuleProps> = ({
   const [pastedContent, setPastedContent] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
 
+  const [isReplaceFileOpen, setIsReplaceFileOpen] = useState(false);
+
   const processBuffer = (buffer: ArrayBuffer, fileName: string) => {
     try {
       setUploadError(null);
@@ -69,6 +71,7 @@ export const DataUploadModule: React.FC<DataUploadModuleProps> = ({
         return;
       }
       onDataLoaded(rows, fileName, sheetData, sheets);
+      setIsReplaceFileOpen(false);
     } catch (err: any) {
       console.error('Error procesando archivo Excel:', err);
       setUploadError(
@@ -132,6 +135,7 @@ export const DataUploadModule: React.FC<DataUploadModuleProps> = ({
       onDataLoaded(rows, 'Datos_Pegados_Excel.xlsx');
       setShowPasteModal(false);
       setPastedContent('');
+      setIsReplaceFileOpen(false);
     } catch (err) {
       setUploadError('Error al interpretar las celdas pegadas. Asegúrate de copiar incluyendo la fila de encabezados.');
     }
@@ -144,145 +148,199 @@ export const DataUploadModule: React.FC<DataUploadModuleProps> = ({
 
   return (
     <div className="space-y-8">
-      {/* SECTION 1: CARGA DE ARCHIVO & BANCO DE CASOS */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
-          <div>
-            <h2 className="text-xl font-bold text-slate-900">
-              1. Carga y Reconocimiento de Datos (.xlsx / .xls)
-            </h2>
-            <p className="text-sm text-slate-500 mt-1">
-              Sube el archivo Excel de tu empresa o selecciona un dataset industrial de prueba pre-configurado.
-            </p>
+      {/* SECTION 1: ESTADO DEL ARCHIVO & CARGADOR */}
+      {data.length > 0 && !isReplaceFileOpen ? (
+        <div className="bg-white rounded-xl border border-emerald-200 p-6 shadow-sm bg-gradient-to-r from-emerald-50/40 via-white to-white">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start gap-3.5">
+              <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 shrink-0 mt-0.5 shadow-xs">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-100/80 px-2.5 py-0.5 rounded-full">
+                    Dataset Cargado y Procesado
+                  </span>
+                  {rawFilename && (
+                    <span className="text-xs font-mono font-semibold text-slate-800">
+                      {rawFilename}
+                    </span>
+                  )}
+                </div>
+                <h2 className="text-lg font-bold text-slate-900 mt-1">
+                  Reconocimiento completado: {data.length.toLocaleString()} filas y {quality.totalCols} variables
+                </h2>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Los datos fueron parseados con éxito con soporte para notación numérica y decimales en español.
+                </p>
+                {sheetNames.length > 1 && (
+                  <div className="flex items-center gap-2 mt-2 text-xs text-slate-700">
+                    <span className="font-medium text-slate-500">Hoja activa del libro:</span>
+                    <select
+                      value={currentSheet}
+                      onChange={(e) => onSelectSheet(e.target.value)}
+                      className="text-xs border border-slate-300 rounded px-2.5 py-1 bg-white font-medium text-slate-800 focus:ring-1 focus:ring-slate-900"
+                    >
+                      {sheetNames.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsReplaceFileOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg shadow-2xs transition-colors"
+              >
+                <Upload className="w-3.5 h-3.5 text-slate-500" />
+                <span>Cargar otro archivo</span>
+              </button>
+              <button
+                type="button"
+                onClick={onNextStep}
+                className="inline-flex items-center gap-2 px-5 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-sm transition-colors"
+              >
+                <span>Avanzar a Clasificación</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
-          {rawFilename && (
-            <div className="text-xs text-slate-500">
-              <span>Archivo activo: </span>
-              <span className="font-semibold text-slate-900">{rawFilename}</span>
-              {sheetNames.length > 1 && (
-                <>
-                  <span className="mx-1.5 text-slate-300">·</span>
-                  <span>Hoja: </span>
-                  <select
-                    value={currentSheet}
-                    onChange={(e) => onSelectSheet(e.target.value)}
-                    className="ml-1 text-xs border border-slate-300 rounded px-2 py-1 bg-white font-medium text-slate-800"
-                  >
-                    {sheetNames.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </>
-              )}
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900">
+                1. Carga y Reconocimiento de Datos (.xlsx / .xls)
+              </h2>
+              <p className="text-sm text-slate-500 mt-1">
+                Sube el archivo Excel de tu empresa o selecciona un dataset industrial de prueba pre-configurado.
+              </p>
+            </div>
+            {data.length > 0 && isReplaceFileOpen && (
+              <button
+                type="button"
+                onClick={() => setIsReplaceFileOpen(false)}
+                className="text-xs font-semibold text-slate-600 hover:text-slate-900 px-3 py-1.5 border border-slate-300 rounded-lg"
+              >
+                ← Volver al dataset actual ({rawFilename})
+              </button>
+            )}
+          </div>
+
+          {/* GUÍA IMPORTANTE PARA EL USUARIO SOBRE CARGA */}
+          <div className="p-3.5 mb-5 rounded-lg bg-indigo-50/70 border border-indigo-200/80 text-xs text-indigo-950 flex items-start gap-2.5">
+            <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+            <div className="leading-relaxed">
+              <span className="font-bold text-indigo-900">¿Dónde cargar tu archivo Excel? </span>
+              <span>
+                Sube tu archivo <strong className="font-semibold">directamente aquí dentro de la aplicación</strong> utilizando el recuadro punteado o el botón negro de abajo. <em className="not-italic text-indigo-800">Nota: No lo adjuntes en la barra de chat de la plataforma</em>, ya que el chat general solo admite texto e imágenes, mientras que este cargador procesa libros Excel de forma nativa e inmediata.
+              </span>
+            </div>
+          </div>
+
+          {/* Error notice if upload failed */}
+          {uploadError && (
+            <div className="mb-4 p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{uploadError}</span>
             </div>
           )}
-        </div>
 
-        {/* GUÍA IMPORTANTE PARA EL USUARIO SOBRE CARGA */}
-        <div className="p-3.5 mb-5 rounded-lg bg-indigo-50/70 border border-indigo-200/80 text-xs text-indigo-950 flex items-start gap-2.5">
-          <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
-          <div className="leading-relaxed">
-            <span className="font-bold text-indigo-900">¿Dónde cargar tu archivo Excel? </span>
-            <span>
-              Sube tu archivo <strong className="font-semibold">directamente aquí dentro de la aplicación</strong> utilizando el recuadro punteado o el botón negro de abajo. <em className="not-italic text-indigo-800">Nota: No lo adjuntes en la barra de chat de la plataforma</em>, ya que el chat general de IA solo admite texto e imágenes, mientras que este cargador procesa libros Excel de forma nativa e inmediata.
-            </span>
-          </div>
-        </div>
+          {/* Dropzone interactivo */}
+          <div
+            onDragEnter={handleDrag}
+            onDragLeave={handleDrag}
+            onDragOver={handleDrag}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
+              dragActive
+                ? 'border-indigo-600 bg-indigo-50/60'
+                : 'border-slate-300 hover:border-slate-500 bg-slate-50/80'
+            }`}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx, .xls, .csv, .xlsm, .xlsb, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel, text/csv, application/csv, text/plain"
+              onChange={handleFileUpload}
+              className="hidden"
+            />
+            <div className="w-14 h-14 mx-auto rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-700 mb-3 shadow-xs">
+              <Upload className="w-6 h-6 text-indigo-600" />
+            </div>
 
-        {/* Error notice if upload failed */}
-        {uploadError && (
-          <div className="mb-4 p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-            <span>{uploadError}</span>
-          </div>
-        )}
+            <p className="text-base font-bold text-slate-900">
+              Arrastra tu archivo Excel (.xlsx / .xls) aquí
+            </p>
+            <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+              Compatible con libros de cálculo de Microsoft Excel, archivos CSV y hojas con múltiples pestañas. Soporta separador decimal por coma o punto y símbolos monetarios ($ COP, USD, MXN).
+            </p>
 
-        {/* Dropzone interactivo */}
-        <div
-          onDragEnter={handleDrag}
-          onDragLeave={handleDrag}
-          onDragOver={handleDrag}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-          className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
-            dragActive
-              ? 'border-indigo-600 bg-indigo-50/60'
-              : 'border-slate-300 hover:border-slate-500 bg-slate-50/80'
-          }`}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx, .xls, .csv, .xlsm, .xlsb, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel, text/csv, application/csv, text/plain"
-            onChange={handleFileUpload}
-            className="hidden"
-          />
-          <div className="w-14 h-14 mx-auto rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-700 mb-3 shadow-xs">
-            <Upload className="w-6 h-6 text-indigo-600" />
-          </div>
-
-          <p className="text-base font-bold text-slate-900">
-            Arrastra tu archivo Excel (.xlsx / .xls) aquí
-          </p>
-          <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-            Compatible con libros de cálculo de Microsoft Excel, archivos CSV y hojas con múltiples pestañas.
-          </p>
-
-          <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                fileInputRef.current?.click();
-              }}
-              className="px-5 py-2.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-sm transition-colors"
-            >
-              Seleccionar archivo Excel de mi equipo
-            </button>
-
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowPasteModal(true);
-              }}
-              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors"
-            >
-              <ClipboardPaste className="w-3.5 h-3.5 text-slate-600" />
-              <span>O pegar celdas copiadas (Ctrl+V)</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Datasets de prueba predefinidos */}
-        <div className="mt-6 pt-6 border-t border-slate-100">
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
-            O explora con un dataset empresarial representativo precargado:
-          </p>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {SAMPLE_DATASETS.map((sample) => (
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
               <button
-                key={sample.id}
-                onClick={() => onDataLoaded(sample.data, `${sample.title}.xlsx`)}
-                className="text-left p-3.5 rounded-lg border border-slate-200 hover:border-indigo-500 hover:bg-indigo-50/30 transition-all group"
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  fileInputRef.current?.click();
+                }}
+                className="px-5 py-2.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-sm transition-colors"
               >
-                <div className="flex items-center justify-between text-xs font-semibold text-slate-900 group-hover:text-indigo-600">
-                  <span>{sample.title}</span>
-                  <span className="font-mono text-slate-400">{sample.rows} filas</span>
-                </div>
-                <p className="text-xs text-slate-500 mt-1 line-clamp-2">
-                  {sample.description}
-                </p>
-                <div className="text-[11px] text-slate-400 mt-2">
-                  Sector: {sample.sector}
-                </div>
+                Seleccionar archivo Excel de mi equipo
               </button>
-            ))}
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowPasteModal(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors"
+              >
+                <ClipboardPaste className="w-3.5 h-3.5 text-slate-600" />
+                <span>O pegar celdas copiadas (Ctrl+V)</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Datasets de prueba predefinidos */}
+          <div className="mt-6 pt-6 border-t border-slate-100">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
+              O explora con un dataset empresarial representativo precargado:
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {SAMPLE_DATASETS.map((sample) => (
+                <button
+                  key={sample.id}
+                  onClick={() => {
+                    onDataLoaded(sample.data, `${sample.title}.xlsx`);
+                    setIsReplaceFileOpen(false);
+                  }}
+                  className="text-left p-3.5 rounded-lg border border-slate-200 hover:border-indigo-500 hover:bg-indigo-50/30 transition-all group"
+                >
+                  <div className="flex items-center justify-between text-xs font-semibold text-slate-900 group-hover:text-indigo-600">
+                    <span>{sample.title}</span>
+                    <span className="font-mono text-slate-400">{sample.rows} filas</span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1 line-clamp-2">
+                    {sample.description}
+                  </p>
+                  <div className="text-[11px] text-slate-400 mt-2">
+                    Sector: {sample.sector}
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* MODAL PARA PEGAR CELDAS DIRECTAMENTE DESDE EXCEL */}
       {showPasteModal && (

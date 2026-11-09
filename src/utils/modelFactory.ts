@@ -11,6 +11,7 @@ import {
   fitLasso,
   fitOLS,
   fitRidge,
+  pearsonCorrelation,
 } from './math';
 
 export function trainAndEvaluateModels(params: {
@@ -26,26 +27,36 @@ export function trainAndEvaluateModels(params: {
 } {
   const { encodedData, featureNames, targetName, dummyMap, businessRules } = params;
   const n = encodedData.length;
-  const p = featureNames.length;
+  let activeFeatures = [...featureNames];
 
-  if (n < p + 2) {
-    throw new Error('El número de registros es insuficiente respecto a la cantidad de variables para estimar los modelos.');
+  // If number of observations is close to or less than number of features,
+  // automatically select the top predictors by absolute correlation to guarantee degrees of freedom
+  if (n < activeFeatures.length + 2 && n > 3) {
+    const yVals = encodedData.map((row) => row[targetName] ?? 0);
+    const ranked = activeFeatures.map((f) => {
+      const xVals = encodedData.map((row) => row[f] ?? 0);
+      const corr = Math.abs(pearsonCorrelation(xVals, yVals));
+      return { name: f, corr: isNaN(corr) ? 0 : corr };
+    });
+    ranked.sort((a, b) => b.corr - a.corr);
+    const maxK = Math.max(1, n - 3);
+    activeFeatures = ranked.slice(0, maxK).map((r) => r.name);
   }
 
-  // Extract base matrices
-  const X_base: number[][] = encodedData.map((row) => featureNames.map((f) => row[f]));
-  const y: number[] = encodedData.map((row) => row[targetName]);
+  const p = activeFeatures.length;
+  const y: number[] = encodedData.map((row) => row[targetName] ?? 0);
+  const X_base: number[][] = encodedData.map((row) => activeFeatures.map((f) => row[f] ?? 0));
 
   const targetStats = calculateSummaryStats(y);
   const targetMean = targetStats.mean || 1;
 
   // Compute baseline VIFs for base features
-  const baseVIFs = calculateVIFs(X_base, featureNames);
+  const baseVIFs = calculateVIFs(X_base, activeFeatures);
 
   const models: ModelEvaluation[] = [];
 
   // 1. OLS TRADICIONAL
-  const olsFit = fitOLS(X_base, y, featureNames);
+  const olsFit = fitOLS(X_base, y, activeFeatures);
   models.push(
     createModelEvaluation({
       id: 'model_ols',
@@ -53,7 +64,7 @@ export function trainAndEvaluateModels(params: {
       type: 'ols',
       description: 'Estimación clásica por Mínimos Cuadrados Ordinarios insesgada bajo supuestos de Gauss-Markov.',
       fit: olsFit,
-      featureNames,
+      featureNames: activeFeatures,
       y,
       baseVIFs,
       dummyMap,
@@ -72,7 +83,7 @@ export function trainAndEvaluateModels(params: {
   );
 
   // 2. REGRESIÓN RIDGE (L2)
-  const ridgeFit = fitRidge(X_base, y, featureNames, 0.5);
+  const ridgeFit = fitRidge(X_base, y, activeFeatures, 0.5);
   models.push(
     createModelEvaluation({
       id: 'model_ridge',
@@ -80,7 +91,7 @@ export function trainAndEvaluateModels(params: {
       type: 'ridge',
       description: 'Penalización cuadrática que contrae los coeficientes para estabilizar la varianza en presencia de correlaciones.',
       fit: ridgeFit,
-      featureNames,
+      featureNames: activeFeatures,
       y,
       baseVIFs,
       dummyMap,
@@ -98,7 +109,7 @@ export function trainAndEvaluateModels(params: {
   );
 
   // 3. REGRESIÓN LASSO (L1)
-  const lassoFit = fitLasso(X_base, y, featureNames, 0.25);
+  const lassoFit = fitLasso(X_base, y, activeFeatures, 0.25);
   models.push(
     createModelEvaluation({
       id: 'model_lasso',
@@ -106,7 +117,7 @@ export function trainAndEvaluateModels(params: {
       type: 'lasso',
       description: 'Penalización absoluta que anula a cero coeficientes no informativos, realizando selección automática de variables.',
       fit: lassoFit,
-      featureNames,
+      featureNames: activeFeatures,
       y,
       baseVIFs,
       dummyMap,
@@ -123,7 +134,7 @@ export function trainAndEvaluateModels(params: {
   );
 
   // 4. REGRESIÓN ELASTIC NET
-  const enetFit = fitElasticNet(X_base, y, featureNames, 0.2, 0.5);
+  const enetFit = fitElasticNet(X_base, y, activeFeatures, 0.2, 0.5);
   models.push(
     createModelEvaluation({
       id: 'model_elastic_net',
@@ -131,7 +142,7 @@ export function trainAndEvaluateModels(params: {
       type: 'elastic_net',
       description: 'Híbrido equilibrado que combina selección de variables de Lasso con la estabilidad de grupos de Ridge.',
       fit: enetFit,
-      featureNames,
+      featureNames: activeFeatures,
       y,
       baseVIFs,
       dummyMap,
@@ -149,13 +160,13 @@ export function trainAndEvaluateModels(params: {
 
   // 5. REGRESIÓN POLINÓMICA (Términos Cuadráticos)
   // Expand first numeric feature with quadratic term to test non-linear returns
-  const firstNumeric = featureNames.find((f) => !dummyMap[f]);
-  if (firstNumeric && p <= 8) {
+  const firstNumeric = activeFeatures.find((f) => !dummyMap[f]);
+  if (firstNumeric && p <= 8 && n > p + 3) {
     const polyFeatureName = `${firstNumeric}_al_Cuadrado`;
-    const polyFeatures = [...featureNames, polyFeatureName];
+    const polyFeatures = [...activeFeatures, polyFeatureName];
     const X_poly = encodedData.map((row) => [
-      ...featureNames.map((f) => row[f]),
-      Math.pow(row[firstNumeric], 2),
+      ...activeFeatures.map((f) => row[f] ?? 0),
+      Math.pow(row[firstNumeric] ?? 0, 2),
     ]);
 
     try {
@@ -183,20 +194,20 @@ export function trainAndEvaluateModels(params: {
           businessUse: 'Apropiado para detectar puntos de saturación y optimización de precios o pauta.',
         })
       );
-    } catch (e) {
+    } catch {
       // Skip if matrix becomes singular
     }
   }
 
   // 6. REGRESIÓN CON INTERACCIÓN
-  if (featureNames.length >= 2 && p <= 8) {
-    const f1 = featureNames[0];
-    const f2 = featureNames[1];
+  if (activeFeatures.length >= 2 && p <= 8 && n > p + 3) {
+    const f1 = activeFeatures[0];
+    const f2 = activeFeatures[1];
     const interName = `${f1}_x_${f2}`;
-    const interFeatures = [...featureNames, interName];
+    const interFeatures = [...activeFeatures, interName];
     const X_inter = encodedData.map((row) => [
-      ...featureNames.map((f) => row[f]),
-      row[f1] * row[f2],
+      ...activeFeatures.map((f) => row[f] ?? 0),
+      (row[f1] ?? 0) * (row[f2] ?? 0),
     ]);
 
     try {

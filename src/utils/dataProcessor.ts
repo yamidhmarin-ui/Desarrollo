@@ -6,6 +6,53 @@ import {
 } from '../types';
 import { calculateSummaryStats } from './math';
 
+/**
+ * Flexible number parser supporting:
+ * - Spanish/Latin American decimals with comma: "12,5" -> 12.5
+ * - Thousands separator with dot: "1.250,50" -> 1250.5
+ * - Currency strings: "$ 45.000,00", "COP 15000", "USD 25.5"
+ * - Percentages: "15,4%" -> 15.4
+ * - Standard US notation: "1,500.75" -> 1500.75
+ */
+export function parseFlexibleNumber(val: any): number | null {
+  if (val === null || val === undefined || val === '') return null;
+  if (typeof val === 'number') return isNaN(val) || !isFinite(val) ? null : val;
+  if (typeof val !== 'string') return null;
+
+  let str = val.trim();
+  if (!str) return null;
+
+  // Remove common currency symbols, codes and whitespace
+  str = str.replace(/[$€£¥\s]|USD|COP|MXN|EUR|PEN|CLP/gi, '');
+
+  // Handle percentages
+  if (str.endsWith('%')) {
+    str = str.slice(0, -1).trim();
+  }
+
+  // Handle commas and dots
+  const lastDot = str.lastIndexOf('.');
+  const lastComma = str.lastIndexOf(',');
+
+  if (lastComma > lastDot) {
+    // Spanish/European notation: "1.234,56" or "1234,56"
+    str = str.replace(/\./g, '').replace(',', '.');
+  } else if (lastDot > lastComma) {
+    // US notation: "1,234.56"
+    str = str.replace(/,/g, '');
+  } else if (lastComma !== -1 && lastDot === -1) {
+    // Only comma present: "123,45"
+    str = str.replace(',', '.');
+  }
+
+  const num = Number(str);
+  return isNaN(num) || !isFinite(num) ? null : num;
+}
+
+/**
+ * Smart Excel parser that detects true header rows, cleans column names,
+ * and standardizes Spanish numeric formatting.
+ */
 export function parseExcelFile(
   fileData: ArrayBuffer
 ): { sheetNames: string[]; sheets: Record<string, any[]> } {
@@ -15,8 +62,98 @@ export function parseExcelFile(
 
   for (const name of sheetNames) {
     const worksheet = workbook.Sheets[name];
-    const json = XLSX.utils.sheet_to_json(worksheet, { defval: null });
-    sheets[name] = json as any[];
+    if (!worksheet) continue;
+
+    // Read as 2D array of rows
+    const rawRows: any[][] = XLSX.utils.sheet_to_json(worksheet, {
+      header: 1,
+      defval: null,
+      blankrows: false,
+    });
+
+    if (!rawRows || rawRows.length === 0) {
+      sheets[name] = [];
+      continue;
+    }
+
+    // 1. Find true header row: first row with at least 2 non-empty text cells
+    let headerIdx = -1;
+    for (let r = 0; r < Math.min(rawRows.length, 10); r++) {
+      const nonNullCells = (rawRows[r] || []).filter(
+        (c) => c !== null && c !== undefined && String(c).trim() !== ''
+      );
+      if (nonNullCells.length >= 2) {
+        headerIdx = r;
+        break;
+      }
+    }
+
+    if (headerIdx === -1) headerIdx = 0;
+
+    const rawHeaderRow = rawRows[headerIdx] || [];
+    // Clean headers and ensure uniqueness
+    const usedNames = new Set<string>();
+    const headers: string[] = rawHeaderRow.map((h, i) => {
+      let cleaned = h !== null && h !== undefined ? String(h).trim() : `Columna_${i + 1}`;
+      if (!cleaned || cleaned.startsWith('__EMPTY')) {
+        cleaned = `Columna_${i + 1}`;
+      }
+      // Deduplicate if needed
+      let uniqueName = cleaned;
+      let counter = 1;
+      while (usedNames.has(uniqueName)) {
+        uniqueName = `${cleaned}_${counter++}`;
+      }
+      usedNames.add(uniqueName);
+      return uniqueName;
+    });
+
+    // 2. Parse data rows
+    const sheetData: Record<string, any>[] = [];
+    for (let r = headerIdx + 1; r < rawRows.length; r++) {
+      const row = rawRows[r];
+      if (!row || !Array.isArray(row)) continue;
+
+      // Check if entire row is empty
+      const hasContent = row.some(
+        (c) => c !== null && c !== undefined && String(c).trim() !== ''
+      );
+      if (!hasContent) continue;
+
+      const rowObj: Record<string, any> = {};
+      for (let c = 0; c < headers.length; c++) {
+        const colName = headers[c];
+        const rawVal = row[c];
+
+        // Check if string can be parsed as a flexible number
+        const parsedNum = parseFlexibleNumber(rawVal);
+        if (parsedNum !== null && (typeof rawVal === 'string' || typeof rawVal === 'number')) {
+          rowObj[colName] = parsedNum;
+        } else if (rawVal instanceof Date) {
+          rowObj[colName] = rawVal.toISOString().split('T')[0];
+        } else {
+          rowObj[colName] = rawVal !== undefined ? rawVal : null;
+        }
+      }
+      sheetData.push(rowObj);
+    }
+
+    // 3. Remove completely blank columns (100% null)
+    if (sheetData.length > 0) {
+      const validColumns = headers.filter((h) =>
+        sheetData.some((row) => row[h] !== null && row[h] !== undefined && row[h] !== '')
+      );
+      const cleanedData = sheetData.map((row) => {
+        const pruned: Record<string, any> = {};
+        for (const col of validColumns) {
+          pruned[col] = row[col];
+        }
+        return pruned;
+      });
+      sheets[name] = cleanedData;
+    } else {
+      sheets[name] = [];
+    }
   }
 
   return { sheetNames, sheets };
@@ -27,8 +164,39 @@ export function parsePastedText(text: string): Record<string, any>[] {
   const workbook = XLSX.read(text, { type: 'string' });
   const firstSheetName = workbook.SheetNames[0];
   const worksheet = workbook.Sheets[firstSheetName];
-  const json = XLSX.utils.sheet_to_json(worksheet, { defval: null });
-  return json as Record<string, any>[];
+  const rawRows: any[][] = XLSX.utils.sheet_to_json(worksheet, {
+    header: 1,
+    defval: null,
+    blankrows: false,
+  });
+
+  if (!rawRows || rawRows.length < 2) return [];
+
+  const headers = (rawRows[0] || []).map((h, i) =>
+    h !== null && h !== undefined ? String(h).trim() : `Columna_${i + 1}`
+  );
+
+  const result: Record<string, any>[] = [];
+  for (let r = 1; r < rawRows.length; r++) {
+    const row = rawRows[r];
+    if (!row || !row.some((c) => c !== null && c !== undefined && String(c).trim() !== '')) {
+      continue;
+    }
+    const rowObj: Record<string, any> = {};
+    for (let c = 0; c < headers.length; c++) {
+      const key = headers[c];
+      const rawVal = row[c];
+      const parsedNum = parseFlexibleNumber(rawVal);
+      if (parsedNum !== null) {
+        rowObj[key] = parsedNum;
+      } else {
+        rowObj[key] = rawVal !== undefined ? rawVal : null;
+      }
+    }
+    result.push(rowObj);
+  }
+
+  return result;
 }
 
 export function profileDataset(data: Record<string, any>[]): {
@@ -53,7 +221,14 @@ export function profileDataset(data: Record<string, any>[]): {
     };
   }
 
-  const columns = Object.keys(data[0]);
+  // Extract all distinct keys across rows
+  const colSet = new Set<string>();
+  for (const row of data) {
+    if (row && typeof row === 'object') {
+      Object.keys(row).forEach((k) => colSet.add(k));
+    }
+  }
+  const columns = Array.from(colSet);
   const totalCols = columns.length;
 
   // Check duplicate rows
@@ -116,31 +291,63 @@ export function profileDataset(data: Record<string, any>[]): {
     });
 
     const colLower = col.toLowerCase();
-    const isIdByName =
+    const isExplicitIdName =
       colLower === 'id' ||
       colLower.endsWith('_id') ||
       colLower.startsWith('id_') ||
       colLower.includes('codigo') ||
+      colLower.includes('código') ||
       colLower.includes('uuid') ||
+      colLower.includes('rut') ||
+      colLower.includes('nit') ||
+      colLower.includes('dni') ||
       colLower.includes('clave');
 
-    const isIdByCardinality = uniqueCount > totalRows * 0.95 && uniqueCount > 20;
-    const isIdentifier = isIdByName || (isIdByCardinality && !isDate);
-
-    // Number check
+    // Number check using parseFlexibleNumber
     const numericValues: number[] = [];
     for (const v of nonMissingValues) {
-      if (typeof v === 'number' && !isNaN(v)) {
-        numericValues.push(v);
-      } else if (typeof v === 'string' && v.trim() !== '') {
-        const parsed = Number(v.replace(/[$€,\s]/g, ''));
-        if (!isNaN(parsed)) {
-          numericValues.push(parsed);
-        }
+      const parsed = parseFlexibleNumber(v);
+      if (parsed !== null) {
+        numericValues.push(parsed);
       }
     }
 
-    const isNumeric = numericValues.length >= nonMissingValues.length * 0.85 && numericValues.length > 0;
+    // If at least 60% of values are valid numbers, treat as numeric
+    const isNumeric =
+      numericValues.length >= Math.max(1, nonMissingValues.length * 0.6) && numericValues.length > 0;
+
+    // Check if it represents an economic/operational magnitude
+    const isEconomicKpi =
+      colLower.includes('precio') ||
+      colLower.includes('price') ||
+      colLower.includes('costo') ||
+      colLower.includes('cost') ||
+      colLower.includes('unidad') ||
+      colLower.includes('unidades') ||
+      colLower.includes('mrr') ||
+      colLower.includes('ingreso') ||
+      colLower.includes('ventas') ||
+      colLower.includes('gasto') ||
+      colLower.includes('inversion') ||
+      colLower.includes('inversión') ||
+      colLower.includes('demanda') ||
+      colLower.includes('margen') ||
+      colLower.includes('tasa') ||
+      colLower.includes('descuento') ||
+      colLower.includes('volumen') ||
+      colLower.includes('produccion') ||
+      colLower.includes('inventario');
+
+    // Identifier classification:
+    // - If it is an economic magnitude or has continuous decimals, it is NEVER an identifier.
+    // - Only flag as identifier if explicitly named ID/codigo, or if it is text/string with >95% unique cardinality.
+    let isIdentifier = false;
+    if (isExplicitIdName && !isEconomicKpi) {
+      isIdentifier = true;
+    } else if (!isNumeric && !isDate && uniqueCount > totalRows * 0.95 && uniqueCount > 20) {
+      // High cardinality text strings (e.g., Client Names, UUIDs, addresses)
+      isIdentifier = true;
+    }
 
     let inferredType: VariableType = 'categorical_nominal';
     let outlierCount = 0;
@@ -211,7 +418,17 @@ export function profileDataset(data: Record<string, any>[]): {
     } else {
       // Categorical
       const lowerVals = nonMissingValues.map((v) => String(v).toLowerCase());
-      const ordinalKeywords = ['bajo', 'medio', 'alto', 'primero', 'segundo', 'tercero', 'starter', 'pro', 'tier 1'];
+      const ordinalKeywords = [
+        'bajo',
+        'medio',
+        'alto',
+        'primero',
+        'segundo',
+        'tercero',
+        'starter',
+        'pro',
+        'tier 1',
+      ];
       const hasOrdinal = ordinalKeywords.some((kw) => lowerVals.includes(kw));
 
       inferredType = hasOrdinal ? 'categorical_ordinal' : 'categorical_nominal';
@@ -252,7 +469,9 @@ export function profileDataset(data: Record<string, any>[]): {
       categories,
       isIdentifier,
       isDate,
-      cardinalityTooHigh: (inferredType === 'categorical_nominal' || inferredType === 'categorical_ordinal') && uniqueCount > 20,
+      cardinalityTooHigh:
+        (inferredType === 'categorical_nominal' || inferredType === 'categorical_ordinal') &&
+        uniqueCount > 20,
     });
   }
 
@@ -294,14 +513,17 @@ export function imputeDataset(
     if (profile.missingCount === 0) continue;
     const col = profile.name;
 
-    // Check if target variable
     if (col === dependentVariable) {
-      // For dependent variable, avoid distortion: drop rows or impute by median with alert
       let imputedCount = 0;
       const medianVal = profile.median ?? 0;
       for (let i = 0; i < imputedData.length; i++) {
         const val = imputedData[i][col];
-        if (val === null || val === undefined || val === '' || (typeof val === 'number' && isNaN(val))) {
+        if (
+          val === null ||
+          val === undefined ||
+          val === '' ||
+          (typeof val === 'number' && isNaN(val))
+        ) {
           imputedData[i][col] = medianVal;
           imputedCount++;
         }
@@ -317,14 +539,19 @@ export function imputeDataset(
     }
 
     if (profile.type === 'numeric_continuous' || profile.type === 'numeric_discrete') {
-      // If skewed (|skew| > 1) or has outliers, use median; else mean
-      const useMedian = (profile.skewness && Math.abs(profile.skewness) > 1) || (profile.outlierCount > 0);
+      const useMedian =
+        (profile.skewness && Math.abs(profile.skewness) > 1) || profile.outlierCount > 0;
       const replacement = useMedian ? profile.median ?? profile.mean ?? 0 : profile.mean ?? 0;
       let count = 0;
 
       for (let i = 0; i < imputedData.length; i++) {
         const val = imputedData[i][col];
-        if (val === null || val === undefined || val === '' || (typeof val === 'number' && isNaN(val))) {
+        if (
+          val === null ||
+          val === undefined ||
+          val === '' ||
+          (typeof val === 'number' && isNaN(val))
+        ) {
           imputedData[i][col] = Number(replacement.toFixed(2));
           count++;
         }
@@ -339,7 +566,6 @@ export function imputeDataset(
           : `Distribución simétrica; se imputó con la Media muestral (${replacement.toFixed(2)}).`,
       });
     } else if (profile.type === 'date') {
-      // Forward fill or linear interpolation
       let count = 0;
       let lastValid: any = null;
       for (let i = 0; i < imputedData.length; i++) {
@@ -355,11 +581,14 @@ export function imputeDataset(
         column: col,
         method: 'linear_interpolation',
         valuesImputed: count,
-        reason: 'Variable temporal: Imputación por arrastre de fecha previa (forward fill) para mantener continuidad en la serie.',
+        reason:
+          'Variable temporal: Imputación por arrastre de fecha previa (forward fill) para mantener continuidad en la serie.',
       });
     } else {
-      // Categorical: Mode or Unknown
-      const topCat = profile.categories && profile.categories[0] ? profile.categories[0].label : 'Desconocido';
+      const topCat =
+        profile.categories && profile.categories[0]
+          ? profile.categories[0].label
+          : 'Desconocido';
       let count = 0;
       for (let i = 0; i < imputedData.length; i++) {
         const val = imputedData[i][col];
@@ -381,9 +610,7 @@ export function imputeDataset(
 }
 
 /**
- * One-Hot Encoding transformation:
- * Encodes categorical variables into dummies and drops one reference category (k-1)
- * to avoid the dummy variable trap (perfect multicollinearity).
+ * One-Hot Encoding transformation
  */
 export function buildOneHotEncodedDataset(
   data: Record<string, any>[],
@@ -396,7 +623,10 @@ export function buildOneHotEncodedDataset(
   dummyMap: Record<string, { originalCol: string; category: string; referenceCategory: string }>;
   droppedCategories: Record<string, string>;
 } {
-  const dummyMap: Record<string, { originalCol: string; category: string; referenceCategory: string }> = {};
+  const dummyMap: Record<
+    string,
+    { originalCol: string; category: string; referenceCategory: string }
+  > = {};
   const droppedCategories: Record<string, string> = {};
   const featureNames: string[] = [];
 
@@ -410,14 +640,13 @@ export function buildOneHotEncodedDataset(
 
     if (prof.type === 'categorical_nominal' || prof.type === 'categorical_ordinal') {
       const distinctCats = (prof.categories || []).map((c) => c.label);
-      if (distinctCats.length <= 1) continue; // no variation
+      if (distinctCats.length <= 1 || distinctCats.length > 20) continue;
 
-      // Reference category: the most frequent one (category 0)
       const refCat = distinctCats[0];
       droppedCategories[colName] = refCat;
 
-      // Keep k-1 categories
-      const activeCats = distinctCats.slice(1);
+      // Limit to at most 4 active categories to preserve degrees of freedom
+      const activeCats = distinctCats.slice(1, 5);
       categoricalFeatures.push({ col: colName, categories: activeCats, refCat });
 
       for (const cat of activeCats) {
@@ -439,13 +668,11 @@ export function buildOneHotEncodedDataset(
   const encodedData: Record<string, number>[] = data.map((row) => {
     const encRow: Record<string, number> = {};
 
-    // Numeric features
     for (const numCol of numericFeatures) {
-      const val = Number(row[numCol]);
-      encRow[numCol] = isNaN(val) ? 0 : val;
+      const val = parseFlexibleNumber(row[numCol]);
+      encRow[numCol] = val !== null ? val : 0;
     }
 
-    // Dummy features
     for (const catFeat of categoricalFeatures) {
       const rowVal = String(row[catFeat.col]);
       for (const cat of catFeat.categories) {
@@ -454,9 +681,8 @@ export function buildOneHotEncodedDataset(
       }
     }
 
-    // Add target
-    const targetVal = Number(row[targetCol]);
-    encRow[targetCol] = isNaN(targetVal) ? 0 : targetVal;
+    const targetVal = parseFlexibleNumber(row[targetCol]);
+    encRow[targetCol] = targetVal !== null ? targetVal : 0;
 
     return encRow;
   });
@@ -482,23 +708,18 @@ export function exportAnalysisToExcel(params: {
 }) {
   const wb = XLSX.utils.book_new();
 
-  // 1. Model Summary
   const wsModels = XLSX.utils.json_to_sheet(params.modelSummary);
   XLSX.utils.book_append_sheet(wb, wsModels, 'Resumen de Modelos');
 
-  // 2. Coefficients
   const wsCoefs = XLSX.utils.json_to_sheet(params.coefficients);
   XLSX.utils.book_append_sheet(wb, wsCoefs, 'Coeficientes e Impactos');
 
-  // 3. Scenarios
   const wsScenarios = XLSX.utils.json_to_sheet(params.scenarios);
   XLSX.utils.book_append_sheet(wb, wsScenarios, 'Simulaciones de Negocio');
 
-  // 4. Strategic Recommendations
   const wsRecs = XLSX.utils.json_to_sheet(params.recommendations);
   XLSX.utils.book_append_sheet(wb, wsRecs, 'Recomendaciones Estrategicas');
 
-  // 5. Processed Dataset
   const wsData = XLSX.utils.json_to_sheet(params.processedData);
   XLSX.utils.book_append_sheet(wb, wsData, 'Dataset Procesado');
 

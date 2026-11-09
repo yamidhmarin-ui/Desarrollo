@@ -119,17 +119,33 @@ export default function App() {
           name.includes('ingreso') ||
           name.includes('mrr') ||
           name.includes('demanda') ||
-          name.includes('costo')
+          name.includes('costo') ||
+          name.includes('utilidad') ||
+          name.includes('margen') ||
+          name.includes('precio') ||
+          name.includes('target') ||
+          name.includes('output') ||
+          name.includes('resultado') ||
+          name === 'y'
         );
       });
-      chosenTarget = kpiMatch ? kpiMatch.name : candidates[candidates.length - 1]?.name || '';
+      chosenTarget =
+        kpiMatch?.name ||
+        candidates[candidates.length - 1]?.name ||
+        initialProfiles.find((p) => p.type === 'numeric_continuous' || p.type === 'numeric_discrete')?.name ||
+        initialProfiles[initialProfiles.length - 1]?.name ||
+        '';
     }
     setTargetCol(chosenTarget);
 
     // Candidate predictors
-    const features = initialProfiles
+    let features = initialProfiles
       .filter((p) => p.name !== chosenTarget && !p.isIdentifier && p.type !== 'irrelevant')
       .map((p) => p.name);
+    if (features.length === 0 && initialProfiles.length > 1) {
+      // Fallback: take all remaining columns
+      features = initialProfiles.filter((p) => p.name !== chosenTarget).map((p) => p.name);
+    }
     setSelectedFeatures(features);
 
     // Infer rules

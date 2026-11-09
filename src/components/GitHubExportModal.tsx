@@ -40,15 +40,25 @@ git push -u origin main`;
     setTimeout(() => setCopied(false), 3000);
   };
 
-  const handleDownloadZip = () => {
-    setIsDownloading(true);
-    const link = document.createElement('a');
-    link.href = '/api/export-zip';
-    link.setAttribute('download', 'regressio-business-ai.zip');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(() => setIsDownloading(false), 2000);
+  const handleDownloadZip = async () => {
+    try {
+      setIsDownloading(true);
+      const res = await fetch('/api/export-zip');
+      if (!res.ok) throw new Error('Error al descargar ZIP');
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = 'regressio-business-ai.zip';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(blobUrl);
+      a.remove();
+    } catch (err) {
+      console.error('Error descargando ZIP:', err);
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   return (

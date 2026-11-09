@@ -31,6 +31,11 @@ if (process.env.GEMINI_API_KEY) {
   }
 }
 
+// Favicon handler to prevent browser console 404 errors
+app.get('/favicon.ico', (req, res) => {
+  res.status(204).end();
+});
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({
