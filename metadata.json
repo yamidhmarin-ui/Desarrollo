@@ -1,0 +1,6 @@
+{
+  "name": "Regressio Business AI - Regresión Múltiple & Simulación Estratégica",
+  "description": "Plataforma analítica integral para selección, evaluación y simulación de modelos de regresión múltiple orientados al contexto y estrategia del negocio.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
